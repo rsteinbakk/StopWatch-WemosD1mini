@@ -3,53 +3,14 @@
   www.rogersteinbakk.no
 *********/
 
-//#include <Arduino.h> //nødvendig?
-#include <NTPClient.h> // Henter tid fra internett
-#include <WiFiUdp.h>
-#include <Firebase_ESP_Client.h>
-
-// FIREBASE initier
-#include <addons/TokenHelper.h>                           //Provide the token generation process info.
-#include <addons/RTDBHelper.h>                            //Provide the RTDB payload printing info and other helper functions.
-#define API_KEY "AIzaSyBroihBK9boV7M2uUwXQqHWYP_nQynB1KA" /* Firebase api-nøkkel */
-#define DATABASE_URL "rs-prototyping-default-rtdb.firebaseio.com"
-
-// Definer Firebase dataobjekt
-FirebaseData fbdo;
-FirebaseAuth auth;
-FirebaseConfig config;
-bool taskCompleted = false; // Forhindrer i å starte firebaseoperasjon dersom oppgave ikke er fullført.
-
-// Logg inn på wifi og start server.
-const char *ssid = "Best i test";
-const char *password = "Margareth";
-WiFiServer server(80); // Set web server port number to 80
-
-// Variabler for å lagre HTTP forespørsel
-String header;
-unsigned long currentTime = millis(); // Current time
-unsigned long previousTime = 0;       // Previous time
-const long timeoutTime = 2000;        // Define timeout time in milliseconds (example: 2000ms = 2s)
-
-// Klargjør laser
-const int pinLaser = D1;    // pin som kontrollerer laser
-const int pinDetector = D8; // pin som kontrollerer laser-avleser
-String laserState = "off";
-
-String startTid = "";
-String stoppTid = "";
-
-// Info om deltager
-String currentCompetitor = "";
-
-// Definer NTP klient for å kunne få tid fra internett.
-const long utcOffsetInSeconds = 3600;
-char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
-WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds);
+#include <innstillinger.h>
 
 void setup()
 {
+
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_RED, OUTPUT);
+
   // Klargjøre laser, setup()-del
   pinMode(pinDetector, INPUT); //
   pinMode(pinLaser, OUTPUT);
@@ -91,6 +52,38 @@ void setup()
 
 void loop()
 {
+
+  /*
+  // Avstandsmåler start
+  // Send ping, get distance in cm
+  distance = sonar.ping_cm();
+
+  // Send results to Serial Monitor
+  Serial.print("Distance = ");
+
+  if (distance < 10)
+  {
+    Serial.print("STARTER!");
+
+    digitalWrite(LED_GREEN, HIGH);
+  }
+  else
+  {
+    digitalWrite(LED_GREEN, LOW);
+  }
+
+  if (distance >= 400 || distance <= 2)
+  {
+    Serial.println("Out of range");
+  }
+  else
+  {
+    Serial.print(distance);
+    Serial.println(" cm");
+  }
+  delay(500); */
+  // slutt avstandsmåler
+
   // runFirebase();
   // timeClient.update();
   /*
@@ -108,6 +101,7 @@ void loop()
   
     delay(1000);
   */
+
   WiFiClient client = server.available(); // Lytt til om klient kobler til wifi-server.
 
   if (client)
@@ -141,15 +135,16 @@ void loop()
             // Får info fra RoggyClock web-app om at adeltaker er klar og henter ned info om deltaker.
             if (header.indexOf("GET /ready") >= 0)
             {
-              if (Firebase.ready())
+              if (Firebase.ready() && currentCompetitor == "")
               {
                 ;
-                if (Firebase.RTDB.setBool(&fbdo, "roggyclock/laserReady", true) && Firebase.RTDB.getString(&fbdo, "roggyclock/currentCompetitor"))
+                if (Firebase.RTDB.setString(&fbdo, "roggyclock/wemosReady", timeClient.getFormattedTime()) && Firebase.RTDB.getString(&fbdo, "roggyclock/currentCompetitor"))
                 {
                   Serial.println(fbdo.to<String>());
                   currentCompetitor = fbdo.to<String>(); // Lagrer firebase-deltager på Wemos
 
-                  digitalWrite(pinLaser, HIGH); // Starter laser
+                  digitalWrite(LED_RED, HIGH);
+
                   laserState = "on";
                 }
                 else
@@ -158,17 +153,54 @@ void loop()
                 }
               }
             }
-
-            // slår av og på laser
-            if (header.indexOf("GET /start") >= 0)
+            else if (header.indexOf("GET /start") >= 0 && currentCompetitor != "")
             {
-
-              if (stoppTid != "")
+              digitalWrite(LED_RED, LOW);
+              digitalWrite(LED_GREEN, HIGH);
+              while (currentCompetitor != "")
               {
-                taskCompleted = false;
-                stoppTid = "";
+
+                distance = sonar.ping_cm();
+                Serial.print(distance);
+                Serial.println(" cm");
+                delay(100);
+                if (distance < 10)
+                {
+                  startTid = timeClient.getFormattedTime();
+                  Firebase.RTDB.setString(&fbdo, "roggyclock/start", startTid);
+                  digitalWrite(LED_GREEN, LOW);
+                  delay(100);
+                  digitalWrite(LED_GREEN, HIGH);
+                  delay(100);
+                  digitalWrite(LED_GREEN, LOW);
+                  delay(100);
+                  digitalWrite(LED_GREEN, HIGH);
+                  delay(5000);
+
+                  while (currentCompetitor != "") // lytter på sluttresultat
+                  {
+                    distance = sonar.ping_cm();
+                    Serial.print(distance);
+                    Serial.println(" cm");
+                    if (distance < 10)
+                    {
+                      stoppTid = timeClient.getFormattedTime();
+                      Firebase.RTDB.setString(&fbdo, "roggyclock/stopp", stoppTid);
+                      currentCompetitor = "";
+                    }
+                    if (currentCompetitor == "")
+                      return;
+                    delay(100);
+                  }
+                }
               }
-              startTid = timeClient.getFormattedTime();
+
+              // if (stoppTid != "")
+              // {
+              //   taskCompleted = false;
+              //   stoppTid = "";
+              //   startTid = "";
+              // }
 
               digitalWrite(pinLaser, HIGH); // Starter laser
               laserState = "on";
@@ -243,8 +275,8 @@ void loop()
             client.println("<body><h1>Rogers Minicontroller Web Server</h1>");
             client.println("<small>Kontroller: Wemos D1 mini </small>");
 
-            if (currentCompetitor != "") 
-            {             
+            if (currentCompetitor != "")
+            {
               client.println("<p>Deltager som er klar: " + currentCompetitor + "</p>");
               client.println("<p><a href=\"/stop\"><button class='button'>Stopp laser</button></a></p>");
             }
